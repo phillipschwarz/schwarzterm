@@ -1,24 +1,3 @@
-//
-//  ContentView.swift
-//  schwarzterm
-//
-//  Created by Phillip Schwarz on 17.03.26.
-//
-
-import SwiftUI
-
-struct ContentView: View {
-    var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
-        }
-        .padding()
-    }
-}
-
-#Preview {
-    ContentView()
-}
+// ContentView.swift
+// Replaced by AppKit layout. See App/AppDelegate.swift.
+// This file is intentionally empty.
