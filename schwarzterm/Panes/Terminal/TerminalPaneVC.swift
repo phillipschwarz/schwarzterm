@@ -34,6 +34,16 @@ class TerminalPaneVC: NSViewController, PaneProtocol {
         setupToolbar()
         setupSessionContainer()
         addSession()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(focusTerminalNotification),
+            name: .focusTerminal,
+            object: nil
+        )
+    }
+
+    @objc private func focusTerminalNotification() {
+        focusCurrentSession()
     }
 
     override func viewDidAppear() {

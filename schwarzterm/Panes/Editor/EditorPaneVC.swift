@@ -270,6 +270,8 @@ class EditorPaneVC: NSViewController, PaneProtocol {
     @objc private func openFileNotification(_ note: Notification) {
         guard let url = note.userInfo?["url"] as? URL else { return }
         openFile(url)
+        // Return focus to the terminal so the user can keep typing
+        NotificationCenter.default.post(name: .focusTerminal, object: nil)
     }
 }
 

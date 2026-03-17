@@ -51,8 +51,16 @@ class TabBarView: NSView {
 
         for (i, title) in titles.enumerated() {
             let btn = TabButton(title: title, isModified: modified[i], isSelected: i == selectedIndex, index: i)
-            btn.target = self
-            btn.action = #selector(tabButtonPressed(_:))
+            btn.onSelect = { [weak self] idx in
+                guard let self else { return }
+                self.selectedIndex = idx
+                self.tabButtons.forEach { $0.isSelected = $0.index == idx }
+                self.delegate?.tabBar(self, didSelectTab: idx)
+            }
+            btn.onClose = { [weak self] idx in
+                guard let self else { return }
+                self.delegate?.tabBar(self, didCloseTab: idx)
+            }
             btn.translatesAutoresizingMaskIntoConstraints = false
             addSubview(btn)
             tabButtons.append(btn)
@@ -62,29 +70,17 @@ class TabBarView: NSView {
     }
 
     private func relayout() {
-        var prev: NSView = self
         var prevAnchor: NSLayoutXAxisAnchor = leadingAnchor
 
         for btn in tabButtons {
             NSLayoutConstraint.activate([
-                btn.leadingAnchor.constraint(equalTo: prevAnchor, constant: prev === self ? 0 : 0),
+                btn.leadingAnchor.constraint(equalTo: prevAnchor),
                 btn.topAnchor.constraint(equalTo: topAnchor),
                 btn.bottomAnchor.constraint(equalTo: bottomAnchor),
                 btn.widthAnchor.constraint(greaterThanOrEqualToConstant: 80),
                 btn.widthAnchor.constraint(lessThanOrEqualToConstant: 200),
             ])
-            prev = btn
             prevAnchor = btn.trailingAnchor
-        }
-    }
-
-    @objc private func tabButtonPressed(_ sender: TabButton) {
-        if sender.isCloseHit {
-            delegate?.tabBar(self, didCloseTab: sender.index)
-        } else {
-            selectedIndex = sender.index
-            tabButtons.forEach { $0.isSelected = $0.index == selectedIndex }
-            delegate?.tabBar(self, didSelectTab: sender.index)
         }
     }
 
@@ -96,13 +92,21 @@ class TabBarView: NSView {
 
 // MARK: - TabButton
 
-class TabButton: NSControl {
+/// A plain NSView tab button. Using NSView (not NSControl) avoids the problem
+/// where NSControl.mouseDown consumes all events and prevents embedded
+/// NSButton subviews from receiving clicks.
+class TabButton: NSView {
     let index: Int
     var isSelected: Bool { didSet { needsDisplay = true } }
     var isModified: Bool { didSet { needsDisplay = true } }
+
+    /// Called when the tab body is clicked (select).
+    var onSelect: ((Int) -> Void)?
+    /// Called when the close × is clicked.
+    var onClose: ((Int) -> Void)?
+
     private let titleLabel = NSTextField(labelWithString: "")
     private let closeButton = NSButton()
-    private(set) var isCloseHit = false
 
     init(title: String, isModified: Bool, isSelected: Bool, index: Int) {
         self.index = index
@@ -130,7 +134,7 @@ class TabButton: NSControl {
         closeButton.contentTintColor = .tertiaryLabelColor
         closeButton.translatesAutoresizingMaskIntoConstraints = false
         closeButton.target = self
-        closeButton.action = #selector(closeHit)
+        closeButton.action = #selector(closePressed)
         addSubview(closeButton)
 
         NSLayoutConstraint.activate([
@@ -144,15 +148,19 @@ class TabButton: NSControl {
         ])
     }
 
-    @objc private func closeHit() {
-        isCloseHit = true
-        sendAction(action, to: target)
-        isCloseHit = false
+    @objc private func closePressed() {
+        onClose?(index)
     }
 
     override func mouseDown(with event: NSEvent) {
-        isCloseHit = false
-        sendAction(action, to: target)
+        // Hit-test: if the click lands inside the close button, forward the
+        // event to it so NSButton handles highlighting/action correctly.
+        let loc = convert(event.locationInWindow, from: nil)
+        if closeButton.frame.contains(loc) {
+            closeButton.mouseDown(with: event)
+            return
+        }
+        onSelect?(index)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -163,7 +171,7 @@ class TabButton: NSControl {
         }
         bounds.fill()
 
-        // Bottom border for selected
+        // Bottom border for selected tab
         if isSelected {
             NSColor.controlAccentColor.setFill()
             NSRect(x: 0, y: 0, width: bounds.width, height: 2).fill()
@@ -173,9 +181,6 @@ class TabButton: NSControl {
         NSColor.separatorColor.withAlphaComponent(0.4).setFill()
         NSRect(x: bounds.maxX - 1, y: 4, width: 1, height: bounds.height - 8).fill()
 
-        titleLabel.textColor = isSelected ? .labelColor : .secondaryLabelColor
-        if isModified {
-            titleLabel.textColor = .controlAccentColor
-        }
+        titleLabel.textColor = isModified ? .controlAccentColor : (isSelected ? .labelColor : .secondaryLabelColor)
     }
 }

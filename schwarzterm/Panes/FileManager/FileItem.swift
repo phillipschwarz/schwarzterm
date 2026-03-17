@@ -1,12 +1,12 @@
 // Panes/FileManager/FileItem.swift
 import Foundation
 
-class FileItem: NSObject {
+final class FileItem: NSObject {
     let url: URL
     let isDirectory: Bool
-    var children: [FileItem]?   // nil = not yet loaded; [] = loaded, empty
-    var isLoaded: Bool { children != nil }
+    private(set) var children: [FileItem]?  // nil = not loaded yet
 
+    var isLoaded: Bool { children != nil }
     var name: String { url.lastPathComponent }
     var displayName: String { name.isEmpty ? url.path : name }
 
@@ -17,29 +17,31 @@ class FileItem: NSObject {
 
     static func root(at url: URL) -> FileItem {
         let item = FileItem(url: url, isDirectory: true)
-        item.loadChildren()
+        item.reload()
         return item
     }
 
-    func loadChildren() {
+    /// Load or refresh children from disk.
+    func reload() {
         guard isDirectory else { children = []; return }
         let fm = FileManager.default
-        let keys: [URLResourceKey] = [.isDirectoryKey, .isHiddenKey, .nameKey]
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isHiddenKey]
         guard let contents = try? fm.contentsOfDirectory(
-                at: url,
-                includingPropertiesForKeys: keys,
-                options: [.skipsSubdirectoryDescendants]
+            at: url,
+            includingPropertiesForKeys: keys,
+            options: [.skipsHiddenFiles]
         ) else {
             children = []
             return
         }
+        // Preserve existing child objects so the outline view can track identity
+        var existing: [URL: FileItem] = [:]
+        for child in children ?? [] { existing[child.url] = child }
+
         children = contents
-            .filter { url in
-                let hidden = (try? url.resourceValues(forKeys: [.isHiddenKey]))?.isHidden ?? false
-                return !hidden
-            }
             .map { childURL -> FileItem in
                 let isDir = (try? childURL.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+                if let old = existing[childURL], old.isDirectory == isDir { return old }
                 return FileItem(url: childURL, isDirectory: isDir)
             }
             .sorted { a, b in

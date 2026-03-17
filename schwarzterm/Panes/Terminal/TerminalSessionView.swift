@@ -31,17 +31,30 @@ class TerminalSessionView: LocalProcessTerminalView {
     }
 
     /// OSC 5000 — emitted by the `e` shell function to open a file in the editor.
-    /// Sequence: ESC ] 5000 ; /absolute/path BEL
+    /// OSC 5001 — emitted by the `o` shell function to open a directory in the file pane.
+    /// Sequence: ESC ] <code> ; /absolute/path BEL
     private func registerOscHandlers() {
         terminal.parser.oscHandlers[5000] = { [weak self] data in
             guard let path = String(bytes: data, encoding: .utf8)?
                     .trimmingCharacters(in: .whitespacesAndNewlines),
                   !path.isEmpty else { return }
-            let url = path.hasPrefix("/") ? URL(fileURLWithPath: path)
-                                          : URL(fileURLWithPath: path)   // startShell cwd not tracked here; shell resolves absolute
+            let url = URL(fileURLWithPath: path)
             DispatchQueue.main.async {
                 NotificationCenter.default.post(
                     name: .openFileInEditor,
+                    object: self,
+                    userInfo: ["url": url]
+                )
+            }
+        }
+        terminal.parser.oscHandlers[5001] = { [weak self] data in
+            guard let path = String(bytes: data, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !path.isEmpty else { return }
+            let url = URL(fileURLWithPath: path)
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(
+                    name: .openDirectoryInFilePane,
                     object: self,
                     userInfo: ["url": url]
                 )
@@ -54,10 +67,13 @@ class TerminalSessionView: LocalProcessTerminalView {
         shellStarted = true
         let cfg = ConfigManager.shared.config
 
-        // Start from the full inherited process environment so PATH and all
-        // user-installed tools (homebrew, npm globals, etc.) are available.
-        // Then overlay SwiftTerm's terminal-specific variables on top.
+        // Get the full login PATH by running the shell as a login shell.
+        // GUI apps on macOS inherit a stripped PATH; this captures what the
+        // user's shell would have after sourcing /etc/profile and ~/.profile etc.
         var envDict = ProcessInfo.processInfo.environment
+        if let loginPath = Self.loginPath(shell: cfg.shell) {
+            envDict["PATH"] = loginPath
+        }
         for entry in Terminal.getEnvironmentVariables(termName: "xterm-256color") {
             let parts = entry.split(separator: "=", maxSplits: 1)
             if parts.count == 2 { envDict[String(parts[0])] = String(parts[1]) }
@@ -83,17 +99,21 @@ class TerminalSessionView: LocalProcessTerminalView {
             .appendingPathComponent("schwarzterm-shell-\(ProcessInfo.processInfo.processIdentifier)")
         try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
 
-        // The `e` function: resolve the path and emit OSC 5000.
+        // The `e` function: resolve the path and emit OSC 5000 (open file in editor).
         let eFunc = #"e() { local p; p=$(realpath "$1" 2>/dev/null || readlink -f "$1" 2>/dev/null || echo "$1"); printf '\033]5000;%s\007' "$p"; }"#
+        // The `o` function: resolve the path and emit OSC 5001 (open directory in file pane).
+        let oFunc = #"o() { local p; p=$(realpath "${1:-.}" 2>/dev/null || readlink -f "${1:-.}" 2>/dev/null || echo "${1:-.}"); printf '\033]5001;%s\007' "$p"; }"#
 
-        // zsh: source user's real ~/.zshrc after defining our function
+        // zsh: source user's real ~/.zshrc after defining our functions
         let zshRC = """
             \(eFunc)
+            \(oFunc)
             [ -f "$HOME/.zshrc" ] && source "$HOME/.zshrc"
             """
         // bash: similar
         let bashRC = """
             \(eFunc)
+            \(oFunc)
             [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"
             [ -f "$HOME/.bash_profile" ] && source "$HOME/.bash_profile"
             """
@@ -108,6 +128,29 @@ class TerminalSessionView: LocalProcessTerminalView {
     /// Reset started flag when shell terminates so it can be restarted
     func shellDidTerminate() {
         shellStarted = false
+    }
+
+    /// Runs the shell as a login shell and captures $PATH, giving us the full
+    /// user PATH including Homebrew, nvm, pyenv, etc. Returns nil on failure.
+    private static func loginPath(shell: String) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: shell)
+        // -l = login shell (sources /etc/profile, ~/.profile, ~/.zprofile etc.)
+        // -c = run command and exit
+        process.arguments = ["-l", "-c", "echo $PATH"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()  // suppress any error output
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let path = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return path?.isEmpty == false ? path : nil
+        } catch {
+            return nil
+        }
     }
 
     // Grab focus on click via gesture recognizer
@@ -145,10 +188,18 @@ private class SessionDelegate: LocalProcessTerminalViewDelegate {
 
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
         guard let dir = directory else { return }
+        // SwiftTerm emits OSC 7 as a full file:// URL (e.g. "file://hostname/path").
+        // Parse it properly so we get the local path, not a broken re-wrapped URL.
+        let url: URL
+        if dir.hasPrefix("file://"), let parsed = URL(string: dir) {
+            url = URL(fileURLWithPath: parsed.path)
+        } else {
+            url = URL(fileURLWithPath: dir)
+        }
         NotificationCenter.default.post(
             name: .terminalDirectoryChanged,
             object: source,
-            userInfo: ["url": URL(fileURLWithPath: dir)]
+            userInfo: ["url": url]
         )
     }
 }
