@@ -369,9 +369,17 @@ class EditorPaneVC: NSViewController, PaneProtocol {
         guard let tv = currentTextView,
               let text = tv.text as NSString? else { return }
         let cursor = tv.textSelection.location
-        // Find the end of the current line
-        let lineEnd = text.lineRange(for: NSRange(location: cursor, length: 0)).upperBound - 1
-        let insertAt = min(lineEnd, text.length)
+        // lineRange includes the trailing \n; scan forward to find it.
+        let lineRange = text.lineRange(for: NSRange(location: cursor, length: 0))
+        // Insert just before the trailing newline (or at end of file if last line).
+        let insertAt: Int
+        if lineRange.upperBound < text.length {
+            // The line ends with \n — insert before it.
+            insertAt = lineRange.upperBound - 1
+        } else {
+            // Last line with no trailing newline — append.
+            insertAt = lineRange.upperBound
+        }
         tv.replaceCharacters(in: NSRange(location: insertAt, length: 0), with: "\n")
         tv.textSelection = NSRange(location: insertAt + 1, length: 0)
     }

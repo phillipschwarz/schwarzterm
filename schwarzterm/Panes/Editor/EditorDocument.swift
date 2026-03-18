@@ -2,7 +2,7 @@
 import Foundation
 
 class EditorDocument {
-    let url: URL?
+    private(set) var url: URL?
     var content: String
     var isModified: Bool = false
 
@@ -32,9 +32,11 @@ class EditorDocument {
         }
     }
 
+    @discardableResult
     func saveAs(to newURL: URL) -> Bool {
         do {
             try content.write(to: newURL, atomically: true, encoding: .utf8)
+            url = newURL
             isModified = false
             return true
         } catch {
