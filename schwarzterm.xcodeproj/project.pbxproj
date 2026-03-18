@@ -7,11 +7,13 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		207E41C52F6A94BD006355DE /* syntax.md in Resources */ = {isa = PBXBuildFile; fileRef = 207E41C42F6A94BD006355DE /* syntax.md */; };
 		2080D53C2F69930000526D71 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 2080D53B2F69930000526D71 /* SwiftTerm */; };
 		2080D53F2F69931300526D71 /* STTextView in Frameworks */ = {isa = PBXBuildFile; productRef = 2080D53E2F69931300526D71 /* STTextView */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		207E41C42F6A94BD006355DE /* syntax.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = syntax.md; sourceTree = "<group>"; };
 		2080D52A2F698DBA00526D71 /* schwarzterm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = schwarzterm.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -41,6 +43,7 @@
 			children = (
 				2080D52C2F698DBA00526D71 /* schwarzterm */,
 				2080D52B2F698DBA00526D71 /* Products */,
+				207E41C42F6A94BD006355DE /* syntax.md */,
 			);
 			sourceTree = "<group>";
 		};
@@ -122,6 +125,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				207E41C52F6A94BD006355DE /* syntax.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

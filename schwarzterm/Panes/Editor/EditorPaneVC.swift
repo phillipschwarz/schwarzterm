@@ -8,17 +8,32 @@ class EditorPaneVC: NSViewController, PaneProtocol {
 
     // MARK: - UI
 
-    private let tabBar = TabBarView()
-    private let editorContainer = NSView()
+    private let tabBar         = TabBarView()
+    private let editorStack    = NSView()   // container; each tab's scrollView is a subview
+    private let welcomeView    = NSView()
     private var findBar: FindBarView?
     private var findBarHeightConstraint: NSLayoutConstraint!
 
     // MARK: - State
 
-    private var documents: [EditorDocument] = []
+    /// One entry per open tab. The scrollView/textView stay alive for the
+    /// lifetime of the tab so scroll position, undo history etc. are preserved.
+    private struct Tab {
+        let doc:        EditorDocument
+        let scrollView: NSScrollView
+        let textView:   STTextView
+    }
+
+    private var tabs: [Tab] = []
     private var currentIndex: Int = 0
-    private var textView: STTextView?
-    private var scrollView: NSScrollView?
+
+    private var currentTextView: STTextView? {
+        guard currentIndex < tabs.count else { return nil }
+        return tabs[currentIndex].textView
+    }
+
+    /// Debounce token for syntax highlighting
+    private var highlightWorkItem: DispatchWorkItem?
 
     // MARK: - Lifecycle
 
@@ -30,9 +45,9 @@ class EditorPaneVC: NSViewController, PaneProtocol {
     override func viewDidLoad() {
         super.viewDidLoad()
         setupTabBar()
-        setupEditorContainer()
+        setupEditorStack()
+        setupWelcomeView()
         setupFindBar()
-        openUntitledIfEmpty()
         observeNotifications()
     }
 
@@ -40,6 +55,7 @@ class EditorPaneVC: NSViewController, PaneProtocol {
 
     private func setupTabBar() {
         tabBar.delegate = self
+        tabBar.isHidden = true
         tabBar.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(tabBar)
         NSLayoutConstraint.activate([
@@ -50,13 +66,15 @@ class EditorPaneVC: NSViewController, PaneProtocol {
         ])
     }
 
-    private func setupEditorContainer() {
-        editorContainer.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(editorContainer)
+    private func setupEditorStack() {
+        editorStack.wantsLayer = true
+        editorStack.layer?.masksToBounds = true
+        editorStack.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(editorStack)
         NSLayoutConstraint.activate([
-            editorContainer.topAnchor.constraint(equalTo: tabBar.bottomAnchor),
-            editorContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            editorContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            editorStack.topAnchor.constraint(equalTo: tabBar.bottomAnchor),
+            editorStack.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            editorStack.trailingAnchor.constraint(equalTo: view.trailingAnchor),
         ])
     }
 
@@ -68,7 +86,7 @@ class EditorPaneVC: NSViewController, PaneProtocol {
         view.addSubview(fb)
         findBarHeightConstraint = fb.heightAnchor.constraint(equalToConstant: 0)
         NSLayoutConstraint.activate([
-            fb.topAnchor.constraint(equalTo: editorContainer.bottomAnchor),
+            fb.topAnchor.constraint(equalTo: editorStack.bottomAnchor),
             fb.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             fb.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             fb.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -84,93 +102,178 @@ class EditorPaneVC: NSViewController, PaneProtocol {
             name: .openFileInEditor,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(focusEditorNotification),
+            name: .focusEditor,
+            object: nil
+        )
     }
 
-    // MARK: - Document Management
+    // MARK: - Welcome View
 
-    private func openUntitledIfEmpty() {
-        guard documents.isEmpty else { return }
-        openDocument(EditorDocument(untitled: ""))
+    private func setupWelcomeView() {
+        welcomeView.wantsLayer = true
+        welcomeView.layer?.backgroundColor = NSColor(white: 0.11, alpha: 1).cgColor
+        welcomeView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(welcomeView)
+        NSLayoutConstraint.activate([
+            welcomeView.topAnchor.constraint(equalTo: tabBar.bottomAnchor),
+            welcomeView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            welcomeView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            welcomeView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+
+        let label = NSTextField(labelWithString: "schwarzterm")
+        label.font = NSFont.systemFont(ofSize: 28, weight: .thin)
+        label.textColor = NSColor(white: 0.35, alpha: 1)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        welcomeView.addSubview(label)
+
+        let sub = NSTextField(labelWithString: "open a file to start editing")
+        sub.font = NSFont.systemFont(ofSize: 12, weight: .regular)
+        sub.textColor = NSColor(white: 0.28, alpha: 1)
+        sub.translatesAutoresizingMaskIntoConstraints = false
+        welcomeView.addSubview(sub)
+
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: welcomeView.centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: welcomeView.centerYAnchor, constant: -14),
+            sub.centerXAnchor.constraint(equalTo: welcomeView.centerXAnchor),
+            sub.topAnchor.constraint(equalTo: label.bottomAnchor, constant: 8),
+        ])
     }
+
+    // MARK: - Document / Tab Management
 
     func openFile(_ url: URL) {
-        if let idx = documents.firstIndex(where: { $0.url == url }) {
+        // If already open, just switch to it
+        if let idx = tabs.firstIndex(where: { $0.doc.url == url }) {
             switchToTab(idx)
             return
         }
-        openDocument(EditorDocument(url: url))
+        addTab(for: EditorDocument(url: url))
     }
 
-    private func openDocument(_ doc: EditorDocument) {
-        documents.append(doc)
-        switchToTab(documents.count - 1)
-        refreshTabBar()
+    /// Creates a new tab with a fresh STTextView and switches to it.
+    private func addTab(for doc: EditorDocument) {
+        let (sv, tv) = makeEditorViews(for: doc)
+        let tab = Tab(doc: doc, scrollView: sv, textView: tv)
+
+        // Add the scroll view to the stack container but keep it hidden for now
+        sv.translatesAutoresizingMaskIntoConstraints = false
+        editorStack.addSubview(sv)
+        NSLayoutConstraint.activate([
+            sv.topAnchor.constraint(equalTo: editorStack.topAnchor),
+            sv.leadingAnchor.constraint(equalTo: editorStack.leadingAnchor),
+            sv.trailingAnchor.constraint(equalTo: editorStack.trailingAnchor),
+            sv.bottomAnchor.constraint(equalTo: editorStack.bottomAnchor),
+        ])
+        sv.isHidden = true
+
+        tabs.append(tab)
+        welcomeView.isHidden = true
+        tabBar.isHidden = false
+        switchToTab(tabs.count - 1)
     }
 
     private func switchToTab(_ index: Int) {
-        guard index >= 0, index < documents.count else { return }
-        // Flush current text back to document before switching
-        if let tv = textView, currentIndex < documents.count {
-            documents[currentIndex].content = tv.text ?? ""
+        guard index >= 0, index < tabs.count else { return }
+
+        // Hide current
+        if currentIndex < tabs.count {
+            tabs[currentIndex].scrollView.isHidden = true
         }
+
         currentIndex = index
-        rebuildEditor(for: documents[index])
+
+        // Show new
+        tabs[currentIndex].scrollView.isHidden = false
+
         refreshTabBar()
         tabBar.selectTab(index)
+        applyHighlighting()
     }
 
     private func refreshTabBar() {
-        let titles = documents.map { $0.displayName }
-        let modified = documents.map { $0.isModified }
+        let titles   = tabs.map { $0.doc.displayName }
+        let modified = tabs.map { $0.doc.isModified }
         tabBar.setTabs(titles, modified: modified)
         tabBar.selectTab(currentIndex)
     }
 
-    // MARK: - Editor View
+    // MARK: - Editor View Factory
 
-    private func rebuildEditor(for doc: EditorDocument) {
-        scrollView?.removeFromSuperview()
-        textView = nil
-
-        // scrollableTextView returns NSScrollView; documentView is the STTextView
+    private func makeEditorViews(for doc: EditorDocument) -> (NSScrollView, STTextView) {
         let sv = STTextView.scrollableTextView()
-        sv.translatesAutoresizingMaskIntoConstraints = false
-        editorContainer.addSubview(sv)
-        NSLayoutConstraint.activate([
-            sv.topAnchor.constraint(equalTo: editorContainer.topAnchor),
-            sv.leadingAnchor.constraint(equalTo: editorContainer.leadingAnchor),
-            sv.trailingAnchor.constraint(equalTo: editorContainer.trailingAnchor),
-            sv.bottomAnchor.constraint(equalTo: editorContainer.bottomAnchor),
-        ])
 
-        guard let tv = sv.documentView as? STTextView else { return }
+        guard let tv = sv.documentView as? STTextView else {
+            fatalError("STTextView.scrollableTextView() did not return STTextView as documentView")
+        }
 
-        let cfg = ConfigManager.shared.config
+        let cfg  = ConfigManager.shared.config
         let font = NSFont(name: cfg.fontName, size: cfg.fontSize)
             ?? NSFont.monospacedSystemFont(ofSize: cfg.fontSize, weight: .regular)
 
-        tv.font = font
-        tv.textColor = .labelColor
-        tv.text = doc.content
-        tv.isEditable = true
-        tv.isSelectable = true
-        tv.showsLineNumbers = true
+        tv.font               = font
+        tv.textColor          = .labelColor
+        tv.text               = doc.content
+        tv.isEditable         = true
+        tv.isSelectable       = true
+        tv.showsLineNumbers   = true
         tv.highlightSelectedLine = true
         tv.isHorizontallyResizable = false
-        tv.delegate = self
+        tv.textDelegate       = self
 
-        scrollView = sv
-        textView = tv
+        return (sv, tv)
+    }
+
+    // MARK: - Syntax Highlighting
+
+    /// Schedules a highlight pass ~150 ms after the last edit.
+    private func scheduleHighlight() {
+        highlightWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.applyHighlighting() }
+        highlightWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: item)
+    }
+
+    /// Applies syntax colors to the current tab's text storage.
+    private func applyHighlighting() {
+        guard currentIndex < tabs.count else { return }
+        let tab = tabs[currentIndex]
+        let ext = tab.doc.url?.pathExtension ?? ""
+        guard let highlighter = makeSyntaxHighlighter(forExtension: ext) else { return }
+
+        let textView = tab.textView
+        guard let storage = textView.textContentManager as? NSTextContentStorage,
+              let nsStorage = storage.textStorage else { return }
+
+        let text = textView.text ?? ""
+        let pairs = highlighter.highlight(text)
+        let fullRange = NSRange(text.startIndex..., in: text)
+
+        nsStorage.beginEditing()
+        // Reset all foreground colors to default first
+        nsStorage.removeAttribute(.foregroundColor, range: fullRange)
+        nsStorage.addAttribute(.foregroundColor, value: NSColor.labelColor, range: fullRange)
+        // Apply highlight pairs
+        for (range, color) in pairs {
+            guard range.location != NSNotFound,
+                  range.location + range.length <= (text as NSString).length else { continue }
+            nsStorage.addAttribute(.foregroundColor, value: color, range: range)
+        }
+        nsStorage.endEditing()
     }
 
     // MARK: - Save
 
     func saveCurrentDocument() {
-        guard currentIndex < documents.count else { return }
-        let doc = documents[currentIndex]
-        if let tv = textView { doc.content = tv.text ?? "" }
-        if doc.url != nil {
-            doc.save()
+        guard currentIndex < tabs.count else { return }
+        let tab = tabs[currentIndex]
+        tab.doc.content = tab.textView.text ?? ""
+        if tab.doc.url != nil {
+            tab.doc.save()
             refreshTabBar()
         } else {
             saveAs()
@@ -178,14 +281,14 @@ class EditorPaneVC: NSViewController, PaneProtocol {
     }
 
     func saveAs() {
-        guard currentIndex < documents.count, let window = view.window else { return }
-        let doc = documents[currentIndex]
-        if let tv = textView { doc.content = tv.text ?? "" }
+        guard currentIndex < tabs.count, let window = view.window else { return }
+        let tab = tabs[currentIndex]
+        tab.doc.content = tab.textView.text ?? ""
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = doc.displayName
+        panel.nameFieldStringValue = tab.doc.displayName
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
-            doc.saveAs(to: url)
+            _ = tab.doc.saveAs(to: url)
             self?.refreshTabBar()
         }
     }
@@ -203,40 +306,18 @@ class EditorPaneVC: NSViewController, PaneProtocol {
         guard let fb = findBar else { return }
         fb.isHidden = true
         findBarHeightConstraint.constant = 0
-        textView?.window?.makeFirstResponder(textView)
+        currentTextView?.window?.makeFirstResponder(currentTextView)
     }
 
-    // MARK: - Key commands
+    // MARK: - Close
 
-    /// Called by the macOS responder chain when File > Save (Cmd+S) is triggered.
-    @objc func saveDocument(_ sender: Any?) {
-        saveCurrentDocument()
-    }
-
-    /// Called by the macOS responder chain when File > Save As (Shift+Cmd+S) is triggered.
-    @objc func saveDocumentAs(_ sender: Any?) {
-        saveAs()
-    }
-
-    override func keyDown(with event: NSEvent) {
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if flags == .command {
-            switch event.charactersIgnoringModifiers {
-            case "f": showFindBar(); return
-            case "w": closeCurrentTab(); return
-            default: break
-            }
-        }
-        super.keyDown(with: event)
-    }
-
-    private func closeCurrentTab() {
-        guard !documents.isEmpty else { return }
-        let doc = documents[currentIndex]
-        if doc.isModified {
-            confirmClose(doc) { [weak self] confirmed in
-                guard confirmed else { return }
-                self?.removeTab(at: self!.currentIndex)
+    func closeCurrentTab() {
+        guard !tabs.isEmpty else { return }
+        let tab = tabs[currentIndex]
+        if tab.doc.isModified {
+            confirmClose(tab.doc) { [weak self] confirmed in
+                guard confirmed, let self else { return }
+                self.removeTab(at: self.currentIndex)
             }
         } else {
             removeTab(at: currentIndex)
@@ -244,9 +325,13 @@ class EditorPaneVC: NSViewController, PaneProtocol {
     }
 
     private func removeTab(at index: Int) {
-        documents.remove(at: index)
-        if documents.isEmpty {
-            openDocument(EditorDocument(untitled: ""))
+        // Tear down the view
+        tabs[index].scrollView.removeFromSuperview()
+        tabs.remove(at: index)
+
+        if tabs.isEmpty {
+            welcomeView.isHidden = false
+            tabBar.isHidden = true
         } else {
             switchToTab(max(0, index - 1))
         }
@@ -256,7 +341,7 @@ class EditorPaneVC: NSViewController, PaneProtocol {
     private func confirmClose(_ doc: EditorDocument, completion: @escaping (Bool) -> Void) {
         guard let window = view.window else { completion(true); return }
         let alert = NSAlert()
-        alert.messageText = "Close \"\(doc.displayName)\"?"
+        alert.messageText     = "Close \"\(doc.displayName)\"?"
         alert.informativeText = "You have unsaved changes."
         alert.addButton(withTitle: "Close Anyway")
         alert.addButton(withTitle: "Cancel")
@@ -265,13 +350,65 @@ class EditorPaneVC: NSViewController, PaneProtocol {
         }
     }
 
+    // MARK: - Responder chain actions (wired via main menu)
+
+    @objc func saveDocument(_ sender: Any?) {
+        saveCurrentDocument()
+    }
+
+    @objc func saveDocumentAs(_ sender: Any?) {
+        saveAs()
+    }
+
+    @objc func showFindBar(_ sender: Any?) {
+        showFindBar()
+    }
+
+    /// Cmd+Return: insert a new line below the current line, move cursor to it.
+    @objc func insertNewlineBelow(_ sender: Any?) {
+        guard let tv = currentTextView,
+              let text = tv.text as NSString? else { return }
+        let cursor = tv.textSelection.location
+        // Find the end of the current line
+        let lineEnd = text.lineRange(for: NSRange(location: cursor, length: 0)).upperBound - 1
+        let insertAt = min(lineEnd, text.length)
+        tv.replaceCharacters(in: NSRange(location: insertAt, length: 0), with: "\n")
+        tv.textSelection = NSRange(location: insertAt + 1, length: 0)
+    }
+
+    @objc func newEditorTab(_ sender: Any?) {
+        addTab(for: EditorDocument(untitled: ""))
+        if let tv = currentTextView {
+            view.window?.makeFirstResponder(tv)
+        }
+    }
+
+    @objc func closeEditorTab(_ sender: Any?) {
+        closeCurrentTab()
+    }
+
+    @objc func selectNextTab(_ sender: Any?) {
+        guard !tabs.isEmpty else { return }
+        switchToTab((currentIndex + 1) % tabs.count)
+    }
+
+    @objc func selectPreviousTab(_ sender: Any?) {
+        guard !tabs.isEmpty else { return }
+        switchToTab((currentIndex - 1 + tabs.count) % tabs.count)
+    }
+
     // MARK: - Notifications
 
     @objc private func openFileNotification(_ note: Notification) {
         guard let url = note.userInfo?["url"] as? URL else { return }
         openFile(url)
-        // Return focus to the terminal so the user can keep typing
-        NotificationCenter.default.post(name: .focusTerminal, object: nil)
+        // Focus the editor text view so the user can start typing immediately.
+        NotificationCenter.default.post(name: .focusEditor, object: nil)
+    }
+
+    @objc private func focusEditorNotification() {
+        guard let tv = currentTextView else { return }
+        view.window?.makeFirstResponder(tv)
     }
 }
 
@@ -288,7 +425,7 @@ extension EditorPaneVC: TabBarViewDelegate {
     }
 
     func tabBarDidRequestNewTab(_ bar: TabBarView) {
-        openDocument(EditorDocument(untitled: ""))
+        addTab(for: EditorDocument(untitled: ""))
     }
 }
 
@@ -296,13 +433,20 @@ extension EditorPaneVC: TabBarViewDelegate {
 
 extension EditorPaneVC: STTextViewDelegate {
 
+    func textView(_ textView: STTextView, shouldChangeTextIn affectedCharRange: NSTextRange, replacementString: String?) -> Bool {
+        // Let AutoPairHandler intercept bracket/quote pairs and balanced deletes.
+        // Returns false to STTextView when it handled the event itself.
+        return !AutoPairHandler.handle(textView: textView, range: affectedCharRange, replacement: replacementString)
+    }
+
     func textViewDidChangeText(_ notification: Notification) {
-        guard currentIndex < documents.count, let tv = textView else { return }
-        let doc = documents[currentIndex]
-        let wasModified = doc.isModified
-        doc.content = tv.text ?? ""
-        doc.isModified = true
+        guard currentIndex < tabs.count else { return }
+        let tab = tabs[currentIndex]
+        let wasModified = tab.doc.isModified
+        tab.doc.content   = tab.textView.text ?? ""
+        tab.doc.isModified = true
         if !wasModified { refreshTabBar() }
+        scheduleHighlight()
     }
 }
 
@@ -311,7 +455,7 @@ extension EditorPaneVC: STTextViewDelegate {
 extension EditorPaneVC: FindBarViewDelegate {
 
     func findBar(_ bar: FindBarView, searchFor searchText: String, forward: Bool) {
-        guard let tv = textView, !searchText.isEmpty else { return }
+        guard let tv = currentTextView, !searchText.isEmpty else { return }
         let fullText = tv.text ?? ""
 
         let currentSel = tv.textSelection
@@ -323,9 +467,7 @@ extension EditorPaneVC: FindBarViewDelegate {
             ? min(currentSel.upperBound + 1, fullText.count)
             : max(currentSel.location, 0)
 
-        let startIdx = fullText.index(fullText.startIndex, offsetBy: min(startOffset, fullText.count))
-        let endIdx = forward ? fullText.endIndex : startIdx
-
+        let startIdx   = fullText.index(fullText.startIndex, offsetBy: min(startOffset, fullText.count))
         let searchRange = forward
             ? startIdx..<fullText.endIndex
             : fullText.startIndex..<startIdx

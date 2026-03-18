@@ -46,6 +46,8 @@ class TerminalPaneVC: NSViewController, PaneProtocol {
         focusCurrentSession()
     }
 
+
+
     override func viewDidAppear() {
         super.viewDidAppear()
         // SwiftTerm needs a valid frame before startProcess

@@ -255,7 +255,7 @@ class FilePaneVC: NSViewController, PaneProtocol {
               let window = view.window else { return }
         FileOperations.presentRenameSheet(for: item.url, in: window) { [weak self] newName in
             guard let newName, !newName.isEmpty else { return }
-            try? FileOperations.rename(item.url, to: newName)
+            _ = try? FileOperations.rename(item.url, to: newName)
             if let parent = self?.parent(of: item) {
                 self?.refreshItem(parent)
             } else {

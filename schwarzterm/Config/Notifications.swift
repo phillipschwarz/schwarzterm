@@ -16,4 +16,7 @@ extension Notification.Name {
 
     /// Posted when the editor opens a file via the `e` command and focus should return to the terminal.
     static let focusTerminal = Notification.Name("schwarzterm.focusTerminal")
+
+    /// Posted when focus should move to the editor text view (e.g. after `e file` opens a file).
+    static let focusEditor = Notification.Name("schwarzterm.focusEditor")
 }
