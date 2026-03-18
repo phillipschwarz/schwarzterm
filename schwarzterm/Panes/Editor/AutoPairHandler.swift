@@ -63,14 +63,25 @@ enum AutoPairHandler {
         let char = str.first!
 
         // ── Skip over matching closer ─────────────────────────────────────────
-        // e.g. cursor is before ) and user types ) — just advance cursor
         if closers.contains(char) {
             let loc = nsRange.location
             if loc < nsText.length {
                 let next = nsText.character(at: loc)
                 if let nextChar = Character(unicode: next), nextChar == char {
-                    textView.textSelection = NSRange(location: loc + 1, length: 0)
-                    return true
+                    // For asymmetric pairs (e.g. ')'), the next char being ')' is enough.
+                    // For symmetric pairs (e.g. '"'), check whether the quote is already
+                    // "open" by counting unescaped occurrences before the cursor. An odd
+                    // count means there is an unmatched opener, so this keystroke closes it.
+                    let isSymmetric = (char == nextChar) // opener == closer
+                    if isSymmetric {
+                        if isQuoteOpen(char, in: nsText, before: loc) {
+                            textView.textSelection = NSRange(location: loc + 1, length: 0)
+                            return true
+                        }
+                    } else {
+                        textView.textSelection = NSRange(location: loc + 1, length: 0)
+                        return true
+                    }
                 }
             }
         }
@@ -78,11 +89,39 @@ enum AutoPairHandler {
         // ── Insert pair and position cursor between them ──────────────────────
         guard let closer = pairs[char] else { return false }
 
+        // For symmetric pairs (opener == closer, e.g. " ' `), don't auto-pair
+        // if this quote is already open — the user is closing an existing string.
+        if char == closer && isQuoteOpen(char, in: nsText, before: nsRange.location) {
+            return false // let the editor insert the single character normally
+        }
+
         let pair = str + String(closer)
         textView.replaceCharacters(in: nsRange, with: pair)
         // Place cursor between opener and closer
         textView.textSelection = NSRange(location: nsRange.location + 1, length: 0)
         return true
+    }
+
+    /// Returns true when `quote` has been opened but not yet closed before `location`.
+    /// Counts unescaped occurrences of the quote character on the current line.
+    private static func isQuoteOpen(_ quote: Character, in text: NSString, before location: Int) -> Bool {
+        // Work on the current line only — quotes rarely span lines in most languages.
+        let lineRange = text.lineRange(for: NSRange(location: location, length: 0))
+        let lineStart = lineRange.location
+        var count = 0
+        var i = lineStart
+        while i < location {
+            let ch = text.character(at: i)
+            if ch == 0x5C { // backslash
+                i += 2 // skip escaped character
+                continue
+            }
+            if let c = Character(unicode: ch), c == quote {
+                count += 1
+            }
+            i += 1
+        }
+        return count % 2 != 0 // odd count = quote is open
     }
 }
 
