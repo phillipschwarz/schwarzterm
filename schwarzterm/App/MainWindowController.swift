@@ -15,6 +15,7 @@ class MainWindowController: NSWindowController {
         window.minSize = NSSize(width: 800, height: 500)
         window.center()
         window.setFrameAutosaveName("MainWindow")
+        window.appearance = NSAppearance(named: .darkAqua)
 
         self.init(window: window)
 
