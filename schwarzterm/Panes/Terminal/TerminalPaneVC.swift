@@ -8,45 +8,84 @@ class TerminalPaneVC: NSViewController, PaneProtocol {
 
     var paneTitle: String { "Terminal" }
 
+    /// Picks the lowest available "Terminal N" number across all panes.
+    private static func nextSessionName() -> String {
+        var used = Set<Int>()
+        for vc in LayoutManager.shared.allPanes() {
+            if let term = vc as? TerminalPaneVC {
+                for s in term.sessions {
+                    if let n = Self.parseSessionNumber(s.sessionName) {
+                        used.insert(n)
+                    }
+                }
+            }
+        }
+        var n = 1
+        while used.contains(n) { n += 1 }
+        return "Terminal \(n)"
+    }
+
+    private static func parseSessionNumber(_ name: String) -> Int? {
+        guard name.hasPrefix("Terminal ") else { return nil }
+        return Int(name.dropFirst("Terminal ".count))
+    }
+
     // MARK: - UI
 
-    private let toolbar          = NSView()
-    private let titleLabel       = NSTextField(labelWithString: "Terminal")
-    private let addButton        = NSButton()
-    private let tabStack         = NSStackView()      // horizontal tab buttons
+    private let tabBar           = TabBarView()
     private let sessionContainer = NSView()
 
     // MARK: - State
 
-    private var sessions: [TerminalSessionView] = []
-    private var currentIndex: Int = 0
+    var sessions: [TerminalSessionView] = []
+    var currentIndex: Int = 0
+
+    /// When true, viewDidLoad skips creating a default session.
+    /// Set before the view is loaded when the pane is created as a drop target.
+    var skipDefaultSession = false
+
+    // MARK: - Drop Zone
+
+    private var dropOverlay: DropZoneOverlayView?
 
     // MARK: - Lifecycle
 
     override func loadView() {
-        view = NSView()
-        view.wantsLayer = true
-        view.layer?.backgroundColor = NSColor(red: 0.12, green: 0.12, blue: 0.12, alpha: 1).cgColor
+        let dropView = PaneDropTargetView()
+        dropView.wantsLayer = true
+        dropView.layer?.backgroundColor = NSColor(red: 0.12, green: 0.12, blue: 0.12, alpha: 1).cgColor
+        dropView.dropHandler = self
+        dropView.registerForDraggedTypes([.schwarztermTab])
+        view = dropView
     }
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        setupToolbar()
+        setupTabBar()
         setupSessionContainer()
-        addSession()
+        if !skipDefaultSession {
+            addSession()
+        }
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(focusTerminalNotification),
             name: .focusTerminal,
             object: nil
         )
+
+        // Drag-and-drop identity
+        tabBar.sourcePaneID = UInt(bitPattern: ObjectIdentifier(self))
+        tabBar.sourcePaneKind = .terminal
+        LayoutManager.shared.registerPane(self)
+    }
+
+    deinit {
+        LayoutManager.shared.unregisterPane(self)
     }
 
     @objc private func focusTerminalNotification() {
         focusCurrentSession()
     }
-
-
 
     override func viewDidAppear() {
         super.viewDidAppear()
@@ -59,42 +98,15 @@ class TerminalPaneVC: NSViewController, PaneProtocol {
 
     // MARK: - Setup
 
-    private func setupToolbar() {
-        toolbar.wantsLayer = true
-        toolbar.layer?.backgroundColor = NSColor(red: 0.15, green: 0.15, blue: 0.15, alpha: 1).cgColor
-        toolbar.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(toolbar)
-
-        // Tab stack (scrollable if many tabs)
-        tabStack.orientation = .horizontal
-        tabStack.spacing = 2
-        tabStack.translatesAutoresizingMaskIntoConstraints = false
-        toolbar.addSubview(tabStack)
-
-        // "+" button on the right
-        addButton.title = "+"
-        addButton.bezelStyle = .inline
-        addButton.isBordered = false
-        addButton.contentTintColor = .secondaryLabelColor
-        addButton.font = .systemFont(ofSize: 14, weight: .regular)
-        addButton.translatesAutoresizingMaskIntoConstraints = false
-        addButton.target = self
-        addButton.action = #selector(addSessionAction)
-        toolbar.addSubview(addButton)
-
+    private func setupTabBar() {
+        tabBar.delegate = self
+        tabBar.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(tabBar)
         NSLayoutConstraint.activate([
-            toolbar.topAnchor.constraint(equalTo: view.topAnchor),
-            toolbar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            toolbar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            toolbar.heightAnchor.constraint(equalToConstant: 28),
-
-            addButton.centerYAnchor.constraint(equalTo: toolbar.centerYAnchor),
-            addButton.trailingAnchor.constraint(equalTo: toolbar.trailingAnchor, constant: -8),
-            addButton.widthAnchor.constraint(equalToConstant: 20),
-
-            tabStack.centerYAnchor.constraint(equalTo: toolbar.centerYAnchor),
-            tabStack.leadingAnchor.constraint(equalTo: toolbar.leadingAnchor, constant: 6),
-            tabStack.trailingAnchor.constraint(lessThanOrEqualTo: addButton.leadingAnchor, constant: -4),
+            tabBar.topAnchor.constraint(equalTo: view.topAnchor),
+            tabBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            tabBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            tabBar.heightAnchor.constraint(equalToConstant: 34),
         ])
     }
 
@@ -102,7 +114,7 @@ class TerminalPaneVC: NSViewController, PaneProtocol {
         sessionContainer.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(sessionContainer)
         NSLayoutConstraint.activate([
-            sessionContainer.topAnchor.constraint(equalTo: toolbar.bottomAnchor),
+            sessionContainer.topAnchor.constraint(equalTo: tabBar.bottomAnchor),
             sessionContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             sessionContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             sessionContainer.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -111,13 +123,10 @@ class TerminalPaneVC: NSViewController, PaneProtocol {
 
     // MARK: - Session Management
 
-    @objc private func addSessionAction() {
-        addSession()
-    }
-
     func addSession() {
         let session = TerminalSessionView(frame: .zero)
         session.translatesAutoresizingMaskIntoConstraints = false
+        session.sessionName = TerminalPaneVC.nextSessionName()
         sessions.append(session)
         sessionContainer.addSubview(session)
 
@@ -157,82 +166,166 @@ class TerminalPaneVC: NSViewController, PaneProtocol {
     }
 
     private func removeSession(at index: Int) {
-        guard sessions.count > 1 else { return }   // keep at least one session
-        sessions[index].removeFromSuperview()
-        sessions.remove(at: index)
-        let next = min(index, sessions.count - 1)
-        switchToSession(next)
-        refreshTabBar()
+        if sessions.count > 1 {
+            sessions[index].removeFromSuperview()
+            sessions.remove(at: index)
+            let next = min(index, sessions.count - 1)
+            switchToSession(next)
+            refreshTabBar()
+        } else if parent is SplitViewController, hasOtherTerminalPanes() {
+            // Last tab in a split pane and other terminal panes exist — collapse
+            SplitManager.shared.collapsePane(self)
+        } else {
+            // Last terminal pane overall — replace with a fresh session
+            sessions[index].removeFromSuperview()
+            sessions.removeAll()
+            addSession()
+        }
+    }
+
+    /// Returns true if any other TerminalPaneVC exists in the registry.
+    private func hasOtherTerminalPanes() -> Bool {
+        for vc in LayoutManager.shared.allPanes() {
+            if let term = vc as? TerminalPaneVC, term !== self {
+                return true
+            }
+        }
+        return false
     }
 
     // MARK: - Tab Bar
 
     private func refreshTabBar() {
-        // Remove all existing tab buttons
-        tabStack.arrangedSubviews.forEach { tabStack.removeArrangedSubview($0); $0.removeFromSuperview() }
-
-        for (i, _) in sessions.enumerated() {
-            let btn = makeTabButton(index: i)
-            tabStack.addArrangedSubview(btn)
-        }
-    }
-
-    private func makeTabButton(index: Int) -> NSView {
-        let container = NSView()
-        container.translatesAutoresizingMaskIntoConstraints = false
-
-        let btn = NSButton(title: "Terminal \(index + 1)", target: self, action: #selector(tabButtonClicked(_:)))
-        btn.tag = index
-        btn.bezelStyle = .inline
-        btn.isBordered = false
-        btn.font = .systemFont(ofSize: 11)
-        btn.contentTintColor = (index == currentIndex) ? .labelColor : .secondaryLabelColor
-        btn.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(btn)
-
-        // Close button (only show when more than 1 session)
-        if sessions.count > 1 {
-            let close = NSButton(title: "×", target: self, action: #selector(closeTabButtonClicked(_:)))
-            close.tag = index
-            close.bezelStyle = .inline
-            close.isBordered = false
-            close.font = .systemFont(ofSize: 10)
-            close.contentTintColor = .tertiaryLabelColor
-            close.translatesAutoresizingMaskIntoConstraints = false
-            container.addSubview(close)
-
-            NSLayoutConstraint.activate([
-                btn.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 4),
-                btn.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-                close.leadingAnchor.constraint(equalTo: btn.trailingAnchor, constant: 2),
-                close.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-                close.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -2),
-                container.heightAnchor.constraint(equalToConstant: 22),
-            ])
-        } else {
-            NSLayoutConstraint.activate([
-                btn.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 4),
-                btn.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-                btn.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -4),
-                container.heightAnchor.constraint(equalToConstant: 22),
-            ])
-        }
-
-        // Highlight active tab
-        if index == currentIndex {
-            container.wantsLayer = true
-            container.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.10).cgColor
-            container.layer?.cornerRadius = 4
-        }
-
-        return container
-    }
-
-    @objc private func tabButtonClicked(_ sender: NSButton) {
-        switchToSession(sender.tag)
-    }
-
-    @objc private func closeTabButtonClicked(_ sender: NSButton) {
-        removeSession(at: sender.tag)
+        let titles = sessions.map { $0.sessionName }
+        let modified = sessions.map { _ in false }
+        tabBar.setTabs(titles, modified: modified)
+        tabBar.selectTab(currentIndex)
+        // Terminal must keep at least 1 session — disable drag if only 1
+        tabBar.dragEnabled = sessions.count > 1
     }
 }
+
+// MARK: - TabBarViewDelegate
+
+extension TerminalPaneVC: TabBarViewDelegate {
+
+    func tabBar(_ bar: TabBarView, didSelectTab index: Int) {
+        switchToSession(index)
+    }
+
+    func tabBar(_ bar: TabBarView, didCloseTab index: Int) {
+        removeSession(at: index)
+    }
+
+    func tabBarDidRequestNewTab(_ bar: TabBarView) {
+        addSession()
+    }
+}
+
+// MARK: - PaneDropHandler
+
+extension TerminalPaneVC: PaneDropHandler {
+
+    func handleDraggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard let payload = decodePayload(from: sender),
+              payload.paneKind == .terminal else { return [] }
+
+        let overlay = DropZoneOverlayView(frame: view.bounds)
+        overlay.autoresizingMask = [.width, .height]
+        view.addSubview(overlay, positioned: .above, relativeTo: nil)
+        dropOverlay = overlay
+
+        let loc = view.convert(sender.draggingLocation, from: nil)
+        overlay.updateZone(for: loc)
+        return .move
+    }
+
+    func handleDraggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard let overlay = dropOverlay else { return [] }
+        let loc = view.convert(sender.draggingLocation, from: nil)
+        overlay.updateZone(for: loc)
+        return .move
+    }
+
+    func handleDraggingExited(_ sender: NSDraggingInfo?) {
+        dropOverlay?.removeFromSuperview()
+        dropOverlay = nil
+    }
+
+    func handlePrepareForDrag(_ sender: NSDraggingInfo) -> Bool {
+        guard let payload = decodePayload(from: sender) else { return false }
+        return payload.paneKind == .terminal
+    }
+
+    func handlePerformDrag(_ sender: NSDraggingInfo) -> Bool {
+        let zone = dropOverlay?.activeZone ?? .none
+        dropOverlay?.removeFromSuperview()
+        dropOverlay = nil
+
+        guard zone != .none,
+              let payload = decodePayload(from: sender) else { return false }
+
+        return SplitManager.shared.executeTabDrop(
+            payload: payload,
+            targetPane: self,
+            zone: zone
+        )
+    }
+
+    private func decodePayload(from sender: NSDraggingInfo) -> TabDragPayload? {
+        guard let data = sender.draggingPasteboard.data(forType: .schwarztermTab),
+              let payload = try? JSONDecoder().decode(TabDragPayload.self, from: data) else { return nil }
+        return payload
+    }
+}
+
+// MARK: - TabTransferProtocol
+
+extension TerminalPaneVC: TabTransferProtocol {
+
+    var paneKind: TabDragPayload.PaneKind { .terminal }
+    var tabCount: Int { sessions.count }
+    var canExtractTab: Bool { sessions.count > 1 }  // must keep at least 1
+    var isEmpty: Bool { sessions.isEmpty }
+
+    func extractTab(at index: Int) -> TransferableTab? {
+        guard index >= 0, index < sessions.count, sessions.count > 1 else { return nil }
+        let session = sessions[index]
+
+        // Detach from view hierarchy but keep the PTY alive
+        session.removeFromSuperview()
+        sessions.remove(at: index)
+
+        let next = min(index, sessions.count - 1)
+        if !sessions.isEmpty {
+            switchToSession(next)
+        }
+        refreshTabBar()
+
+        return .terminal(session: session)
+    }
+
+    func insertTab(_ tab: TransferableTab) {
+        guard case .terminal(let session) = tab else { return }
+        session.translatesAutoresizingMaskIntoConstraints = false
+        sessions.append(session)
+        sessionContainer.addSubview(session)
+
+        // Re-pin to container
+        NSLayoutConstraint.activate([
+            session.topAnchor.constraint(equalTo: sessionContainer.topAnchor),
+            session.bottomAnchor.constraint(equalTo: sessionContainer.bottomAnchor),
+            session.leadingAnchor.constraint(equalTo: sessionContainer.leadingAnchor),
+            session.trailingAnchor.constraint(equalTo: sessionContainer.trailingAnchor),
+        ])
+
+        switchToSession(sessions.count - 1)
+        refreshTabBar()
+
+        // Start shell if not already running and we have a window
+        if viewIfLoaded?.window != nil && !session.shellStarted {
+            session.startShell()
+        }
+    }
+}
+

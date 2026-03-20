@@ -4,6 +4,27 @@ import AppKit
 class LayoutManager {
     static let shared = LayoutManager()
 
+    // MARK: - Pane Registry
+
+    /// Maps ObjectIdentifier (as UInt) → pane VC for drag-and-drop lookups.
+    private var paneRegistry: [UInt: NSViewController] = [:]
+
+    func registerPane(_ vc: NSViewController) {
+        paneRegistry[UInt(bitPattern: ObjectIdentifier(vc))] = vc
+    }
+
+    func unregisterPane(_ vc: NSViewController) {
+        paneRegistry.removeValue(forKey: UInt(bitPattern: ObjectIdentifier(vc)))
+    }
+
+    func pane(forID id: UInt) -> NSViewController? {
+        paneRegistry[id]
+    }
+
+    func allPanes() -> [NSViewController] {
+        Array(paneRegistry.values)
+    }
+
     private var layoutURL: URL {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = support.appendingPathComponent("schwarzterm", isDirectory: true)
@@ -33,11 +54,7 @@ class LayoutManager {
     // MARK: - Private
 
     private func loadLayout() -> PaneLayout {
-        guard let data = try? Data(contentsOf: layoutURL),
-              let layout = try? JSONDecoder().decode(PaneLayout.self, from: data) else {
-            return .defaultLayout
-        }
-        return layout
+        return .defaultLayout
     }
 
     private func buildViewController(from layout: PaneLayout) -> NSViewController {
@@ -61,10 +78,43 @@ class LayoutManager {
     }
 
     private func makePaneVC(_ type: PaneLayout.PaneType) -> NSViewController {
+        let vc: NSViewController
         switch type {
-        case .terminal:     return TerminalPaneVC()
-        case .fileManager:  return FilePaneVC()
-        case .editor:       return EditorPaneVC()
+        case .terminal:     vc = TerminalPaneVC()
+        case .fileManager:  vc = FilePaneVC()
+        case .editor:       vc = EditorPaneVC()
         }
+        registerPane(vc)
+        return vc
+    }
+
+    // MARK: - Layout Capture (VC tree → PaneLayout)
+
+    /// Walk the live view controller tree and produce a PaneLayout.
+    func captureLayout(from vc: NSViewController) -> PaneLayout {
+        if let split = vc as? SplitViewController {
+            let axis: PaneLayout.SplitLayout.Axis = split.isVertical ? .horizontal : .vertical
+            let position = split.currentFraction
+            return .split(.init(
+                axis: axis,
+                position: position,
+                first: captureLayout(from: split.firstVC),
+                second: captureLayout(from: split.secondVC)
+            ))
+        } else if vc is EditorPaneVC {
+            return .leaf(.editor)
+        } else if vc is TerminalPaneVC {
+            return .leaf(.terminal)
+        } else if vc is FilePaneVC {
+            return .leaf(.fileManager)
+        } else {
+            return .leaf(.editor) // fallback
+        }
+    }
+
+    /// Capture the current VC tree from the main window and persist it.
+    /// Currently disabled — always starts with the default layout.
+    func persistCurrentLayout() {
+        // no-op
     }
 }

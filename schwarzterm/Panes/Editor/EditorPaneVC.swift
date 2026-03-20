@@ -18,14 +18,18 @@ class EditorPaneVC: NSViewController, PaneProtocol {
 
     /// One entry per open tab. The scrollView/textView stay alive for the
     /// lifetime of the tab so scroll position, undo history etc. are preserved.
-    private struct Tab {
+    struct Tab {
         let doc:        EditorDocument
         let scrollView: NSScrollView
         let textView:   STTextView
     }
 
-    private var tabs: [Tab] = []
-    private var currentIndex: Int = 0
+    var tabs: [Tab] = []
+    var currentIndex: Int = 0
+
+    // MARK: - Drop Zone
+
+    private var dropOverlay: DropZoneOverlayView?
 
     private var currentTextView: STTextView? {
         guard currentIndex < tabs.count else { return nil }
@@ -38,8 +42,11 @@ class EditorPaneVC: NSViewController, PaneProtocol {
     // MARK: - Lifecycle
 
     override func loadView() {
-        view = NSView()
-        view.wantsLayer = true
+        let dropView = PaneDropTargetView()
+        dropView.wantsLayer = true
+        dropView.dropHandler = self
+        dropView.registerForDraggedTypes([.schwarztermTab])
+        view = dropView
     }
 
     override func viewDidLoad() {
@@ -49,6 +56,15 @@ class EditorPaneVC: NSViewController, PaneProtocol {
         setupWelcomeView()
         setupFindBar()
         observeNotifications()
+
+        // Drag-and-drop identity
+        tabBar.sourcePaneID = UInt(bitPattern: ObjectIdentifier(self))
+        tabBar.sourcePaneKind = .editor
+        LayoutManager.shared.registerPane(self)
+    }
+
+    deinit {
+        LayoutManager.shared.unregisterPane(self)
     }
 
     // MARK: - Setup
@@ -62,7 +78,7 @@ class EditorPaneVC: NSViewController, PaneProtocol {
             tabBar.topAnchor.constraint(equalTo: view.topAnchor),
             tabBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             tabBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            tabBar.heightAnchor.constraint(equalToConstant: 30),
+            tabBar.heightAnchor.constraint(equalToConstant: 34),
         ])
     }
 
@@ -330,6 +346,11 @@ class EditorPaneVC: NSViewController, PaneProtocol {
         tabs.remove(at: index)
 
         if tabs.isEmpty {
+            if parent is SplitViewController, hasOtherEditorPanes() {
+                // Another editor pane exists — collapse this one
+                SplitManager.shared.collapsePane(self)
+                return
+            }
             welcomeView.isHidden = false
             tabBar.isHidden = true
         } else {
@@ -491,5 +512,121 @@ extension EditorPaneVC: FindBarViewDelegate {
 
     func findBarDidClose(_ bar: FindBarView) {
         hideFindBar()
+    }
+    /// Returns true if any other EditorPaneVC exists in the registry.
+    private func hasOtherEditorPanes() -> Bool {
+        for vc in LayoutManager.shared.allPanes() {
+            if let editor = vc as? EditorPaneVC, editor !== self {
+                return true
+            }
+        }
+        return false
+    }
+}
+
+// MARK: - PaneDropHandler
+
+extension EditorPaneVC: PaneDropHandler {
+
+    func handleDraggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard let payload = decodePayload(from: sender),
+              payload.paneKind == .editor else { return [] }
+
+        let overlay = DropZoneOverlayView(frame: view.bounds)
+        overlay.autoresizingMask = [.width, .height]
+        view.addSubview(overlay, positioned: .above, relativeTo: nil)
+        dropOverlay = overlay
+
+        let loc = view.convert(sender.draggingLocation, from: nil)
+        overlay.updateZone(for: loc)
+        return .move
+    }
+
+    func handleDraggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard let overlay = dropOverlay else { return [] }
+        let loc = view.convert(sender.draggingLocation, from: nil)
+        overlay.updateZone(for: loc)
+        return .move
+    }
+
+    func handleDraggingExited(_ sender: NSDraggingInfo?) {
+        dropOverlay?.removeFromSuperview()
+        dropOverlay = nil
+    }
+
+    func handlePrepareForDrag(_ sender: NSDraggingInfo) -> Bool {
+        guard let payload = decodePayload(from: sender) else { return false }
+        return payload.paneKind == .editor
+    }
+
+    func handlePerformDrag(_ sender: NSDraggingInfo) -> Bool {
+        let zone = dropOverlay?.activeZone ?? .none
+        dropOverlay?.removeFromSuperview()
+        dropOverlay = nil
+
+        guard zone != .none,
+              let payload = decodePayload(from: sender) else { return false }
+
+        return SplitManager.shared.executeTabDrop(
+            payload: payload,
+            targetPane: self,
+            zone: zone
+        )
+    }
+
+    private func decodePayload(from sender: NSDraggingInfo) -> TabDragPayload? {
+        guard let data = sender.draggingPasteboard.data(forType: .schwarztermTab),
+              let payload = try? JSONDecoder().decode(TabDragPayload.self, from: data) else { return nil }
+        return payload
+    }
+}
+
+// MARK: - TabTransferProtocol
+
+extension EditorPaneVC: TabTransferProtocol {
+
+    var paneKind: TabDragPayload.PaneKind { .editor }
+    var tabCount: Int { tabs.count }
+    var canExtractTab: Bool { true }    // editor can always give up tabs (pane collapses if empty)
+    var isEmpty: Bool { tabs.isEmpty }
+
+    func extractTab(at index: Int) -> TransferableTab? {
+        guard index >= 0, index < tabs.count else { return nil }
+        let tab = tabs[index]
+
+        // Detach scroll view from hierarchy (keeps it alive)
+        tab.scrollView.removeFromSuperview()
+        tabs.remove(at: index)
+
+        if tabs.isEmpty {
+            welcomeView.isHidden = false
+            tabBar.isHidden = true
+        } else {
+            switchToTab(max(0, index - 1))
+        }
+        refreshTabBar()
+
+        return .editor(doc: tab.doc, scrollView: tab.scrollView, textView: tab.textView)
+    }
+
+    func insertTab(_ tab: TransferableTab) {
+        guard case .editor(let doc, let scrollView, let textView) = tab else { return }
+        let newTab = Tab(doc: doc, scrollView: scrollView, textView: textView)
+
+        // Re-add the scroll view to our editor stack
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        editorStack.addSubview(scrollView)
+        NSLayoutConstraint.activate([
+            scrollView.topAnchor.constraint(equalTo: editorStack.topAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: editorStack.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: editorStack.trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: editorStack.bottomAnchor),
+        ])
+        scrollView.isHidden = true
+
+        tabs.append(newTab)
+        welcomeView.isHidden = true
+        tabBar.isHidden = false
+        switchToTab(tabs.count - 1)
     }
 }

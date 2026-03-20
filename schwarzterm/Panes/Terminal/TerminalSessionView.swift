@@ -9,6 +9,9 @@ class TerminalSessionView: LocalProcessTerminalView {
     private var sessionDelegate: SessionDelegate?
     private(set) var shellStarted = false
 
+    /// Persistent name for this session, assigned at creation and preserved across drag-and-drop.
+    var sessionName: String = "Terminal"
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         let d = SessionDelegate(owner: self)
