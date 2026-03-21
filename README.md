@@ -9,7 +9,7 @@ A native macOS developer tool that combines a terminal emulator, code editor, an
 ### Homebrew (recommended)
 
 ```bash
-brew tap phillipschwarz/schwarzterm
+brew tap phillipschwarz/brewedschwarz
 brew install --cask schwarzterm
 ```
 
