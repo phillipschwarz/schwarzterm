@@ -15,6 +15,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         registerBundledFonts()
+        ThemeManager.shared.apply(named: ConfigManager.shared.config.themeName)
         mainWindowController = MainWindowController()
         mainWindowController?.showWindow(nil)
         buildMenu()
@@ -44,6 +45,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
         // App menu
         let appItem = NSMenuItem()
         let appMenu = NSMenu()
+        appMenu.addItem(NSMenuItem(title: "Settings…", action: #selector(openSettings(_:)), keyEquivalent: ","))
+        appMenu.addItem(.separator())
         appMenu.addItem(NSMenuItem(title: "Quit schwarzterm", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         appItem.submenu = appMenu
         mainMenu.addItem(appItem)
@@ -101,6 +104,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
     @objc func selectNextTab(_ sender: Any?) {}
     @objc func selectPreviousTab(_ sender: Any?) {}
     @objc func insertNewlineBelow(_ sender: Any?) {}
+    @objc func openSettings(_ sender: Any?) {
+        ConfigManager.shared.ensureConfigExists()
+        let url = ConfigManager.shared.configURL
+        NotificationCenter.default.post(name: .openFileInEditor, object: nil, userInfo: ["url": url])
+    }
     @objc func focusEditor(_ sender: Any?) {
         NotificationCenter.default.post(name: .focusEditor, object: nil)
     }

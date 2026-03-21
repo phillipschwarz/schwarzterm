@@ -53,7 +53,7 @@ class TerminalPaneVC: NSViewController, PaneProtocol {
     override func loadView() {
         let dropView = PaneDropTargetView()
         dropView.wantsLayer = true
-        dropView.layer?.backgroundColor = NSColor(red: 0.12, green: 0.12, blue: 0.12, alpha: 1).cgColor
+        dropView.layer?.backgroundColor = ThemeManager.shared.current.terminalBackground.nsColor.cgColor
         dropView.dropHandler = self
         dropView.registerForDraggedTypes([.schwarztermTab])
         view = dropView
@@ -72,6 +72,12 @@ class TerminalPaneVC: NSViewController, PaneProtocol {
             name: .focusTerminal,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(themeDidChange),
+            name: .themeChanged,
+            object: nil
+        )
 
         // Drag-and-drop identity
         tabBar.sourcePaneID = UInt(bitPattern: ObjectIdentifier(self))
@@ -85,6 +91,14 @@ class TerminalPaneVC: NSViewController, PaneProtocol {
 
     @objc private func focusTerminalNotification() {
         focusCurrentSession()
+    }
+
+    @objc private func themeDidChange() {
+        let t = ThemeManager.shared.current
+        view.layer?.backgroundColor = t.terminalBackground.nsColor.cgColor
+        for session in sessions {
+            session.applyTheme()
+        }
     }
 
     override func viewDidAppear() {

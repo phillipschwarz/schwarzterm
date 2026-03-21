@@ -19,4 +19,7 @@ extension Notification.Name {
 
     /// Posted when focus should move to the editor text view (e.g. after `e file` opens a file).
     static let focusEditor = Notification.Name("schwarzterm.focusEditor")
+
+    /// Posted when the active theme changes. Components observe this to re-apply colors.
+    static let themeChanged = Notification.Name("schwarzterm.themeChanged")
 }

@@ -39,7 +39,7 @@ class FilePaneVC: NSViewController, PaneProtocol {
 
     private func setupToolbar() {
         toolbar.wantsLayer = true
-        toolbar.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.8).cgColor
+        toolbar.layer?.backgroundColor = ThemeManager.shared.current.filePaneToolbar.nsColor.cgColor
         toolbar.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(toolbar)
 
@@ -92,7 +92,7 @@ class FilePaneVC: NSViewController, PaneProtocol {
         scrollView.autohidesScrollers = true
         scrollView.borderType = .noBorder
         scrollView.drawsBackground = true
-        scrollView.backgroundColor = .controlBackgroundColor
+        scrollView.backgroundColor = ThemeManager.shared.current.filePaneBackground.nsColor
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(scrollView)
 
@@ -111,7 +111,7 @@ class FilePaneVC: NSViewController, PaneProtocol {
         outlineView.rowHeight = 22
         outlineView.intercellSpacing = NSSize(width: 0, height: 0)
         outlineView.usesAlternatingRowBackgroundColors = false
-        outlineView.backgroundColor = .controlBackgroundColor
+        outlineView.backgroundColor = ThemeManager.shared.current.filePaneBackground.nsColor
         outlineView.indentationPerLevel = 14
         outlineView.dataSource = self
         outlineView.delegate = self
@@ -169,6 +169,20 @@ class FilePaneVC: NSViewController, PaneProtocol {
             name: .openDirectoryInFilePane,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(themeDidChange),
+            name: .themeChanged,
+            object: nil
+        )
+    }
+
+    @objc private func themeDidChange() {
+        let t = ThemeManager.shared.current
+        toolbar.layer?.backgroundColor = t.filePaneToolbar.nsColor.cgColor
+        scrollView.backgroundColor = t.filePaneBackground.nsColor
+        outlineView.backgroundColor = t.filePaneBackground.nsColor
+        outlineView.reloadData()
     }
 
     @objc private func terminalDirectoryChanged(_ note: Notification) {
@@ -405,8 +419,9 @@ extension FilePaneVC: NSOutlineViewDelegate {
             ])
         }
 
+        let t = ThemeManager.shared.current
         cell.textField?.stringValue = fi.displayName
-        cell.textField?.textColor = fi.isDirectory ? .labelColor : .secondaryLabelColor
+        cell.textField?.textColor = fi.isDirectory ? t.filePaneDirectory.nsColor : t.filePaneFile.nsColor
         let icon = NSWorkspace.shared.icon(forFile: fi.url.path)
         icon.size = NSSize(width: 16, height: 16)
         cell.imageView?.image = icon

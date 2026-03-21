@@ -4,9 +4,9 @@ import Foundation
 class ConfigManager {
     static let shared = ConfigManager()
 
-    private(set) var config: AppConfig = AppConfig()
+    var config: AppConfig = AppConfig()
 
-    private var configURL: URL {
+    var configURL: URL {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = support.appendingPathComponent("schwarzterm", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -18,13 +18,28 @@ class ConfigManager {
     }
 
     func load() {
-        guard let data = try? Data(contentsOf: configURL),
-              let decoded = try? JSONDecoder().decode(AppConfig.self, from: data) else { return }
+        let url = configURL
+        guard FileManager.default.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
+              let decoded = try? JSONDecoder().decode(AppConfig.self, from: data) else {
+            // Write default config so the user has a file to edit
+            save()
+            return
+        }
         config = decoded
     }
 
     func save() {
-        guard let data = try? JSONEncoder().encode(config) else { return }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(config) else { return }
         try? data.write(to: configURL)
+    }
+
+    /// Ensures a config file exists on disk, creating it with defaults if needed.
+    func ensureConfigExists() {
+        if !FileManager.default.fileExists(atPath: configURL.path) {
+            save()
+        }
     }
 }

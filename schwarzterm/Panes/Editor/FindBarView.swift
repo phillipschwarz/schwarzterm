@@ -24,7 +24,11 @@ class FindBarView: NSView {
 
     private func setup() {
         wantsLayer = true
-        layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
+        layer?.backgroundColor = ThemeManager.shared.current.findBarBackground.nsColor.cgColor
+
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(themeDidChange), name: .themeChanged, object: nil
+        )
 
         // Top separator
         let sep = NSBox()
@@ -81,6 +85,10 @@ class FindBarView: NSView {
             closeButton.leadingAnchor.constraint(equalTo: nextButton.trailingAnchor, constant: 12),
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
+    }
+
+    @objc private func themeDidChange() {
+        layer?.backgroundColor = ThemeManager.shared.current.findBarBackground.nsColor.cgColor
     }
 
     func focus() {

@@ -29,8 +29,14 @@ class TerminalSessionView: LocalProcessTerminalView {
         let font = NSFont(name: cfg.fontName, size: cfg.fontSize)
             ?? NSFont.monospacedSystemFont(ofSize: cfg.fontSize, weight: .regular)
         self.font = font
-        nativeBackgroundColor = NSColor(red: 0.10, green: 0.10, blue: 0.10, alpha: 1)
-        nativeForegroundColor = NSColor(red: 0.92, green: 0.92, blue: 0.92, alpha: 1)
+        applyTheme()
+    }
+
+    /// Re-applies theme colors to the terminal. Called on init and when the theme changes.
+    func applyTheme() {
+        let t = ThemeManager.shared.current
+        nativeBackgroundColor = t.terminalBackground.nsColor
+        nativeForegroundColor = t.terminalForeground.nsColor
     }
 
     /// OSC 5000 — emitted by the `e` shell function to open a file in the editor.

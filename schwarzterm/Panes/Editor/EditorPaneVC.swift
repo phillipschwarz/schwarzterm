@@ -11,8 +11,11 @@ class EditorPaneVC: NSViewController, PaneProtocol {
     private let tabBar         = TabBarView()
     private let editorStack    = NSView()   // container; each tab's scrollView is a subview
     private let welcomeView    = NSView()
+    private var welcomeTitleLabel: NSTextField?
+    private var welcomeSubtitleLabel: NSTextField?
     private var findBar: FindBarView?
     private var findBarHeightConstraint: NSLayoutConstraint!
+    private var tabBarHeightConstraint: NSLayoutConstraint!
 
     // MARK: - State
 
@@ -74,12 +77,18 @@ class EditorPaneVC: NSViewController, PaneProtocol {
         tabBar.isHidden = true
         tabBar.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(tabBar)
+        tabBarHeightConstraint = tabBar.heightAnchor.constraint(equalToConstant: 0)
         NSLayoutConstraint.activate([
             tabBar.topAnchor.constraint(equalTo: view.topAnchor),
             tabBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             tabBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            tabBar.heightAnchor.constraint(equalToConstant: 34),
+            tabBarHeightConstraint,
         ])
+    }
+
+    private func setTabBarVisible(_ visible: Bool) {
+        tabBar.isHidden = !visible
+        tabBarHeightConstraint.constant = visible ? 34 : 0
     }
 
     private func setupEditorStack() {
@@ -124,13 +133,36 @@ class EditorPaneVC: NSViewController, PaneProtocol {
             name: .focusEditor,
             object: nil
         )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(themeDidChange),
+            name: .themeChanged,
+            object: nil
+        )
+    }
+
+    @objc private func themeDidChange() {
+        let t = ThemeManager.shared.current
+        welcomeView.layer?.backgroundColor = t.welcomeBackground.nsColor.cgColor
+        welcomeTitleLabel?.textColor = t.welcomeTitle.nsColor
+        welcomeSubtitleLabel?.textColor = t.welcomeSubtitle.nsColor
+        // Re-apply colors to all open editor views
+        for tab in tabs {
+            if let sv = tab.scrollView.documentView?.enclosingScrollView {
+                sv.backgroundColor = t.editorBackground.nsColor
+            }
+            tab.textView.textColor = t.editorForeground.nsColor
+            tab.textView.backgroundColor = t.editorBackground.nsColor
+        }
+        applyHighlighting()
     }
 
     // MARK: - Welcome View
 
     private func setupWelcomeView() {
+        let t = ThemeManager.shared.current
         welcomeView.wantsLayer = true
-        welcomeView.layer?.backgroundColor = NSColor(white: 0.11, alpha: 1).cgColor
+        welcomeView.layer?.backgroundColor = t.welcomeBackground.nsColor.cgColor
         welcomeView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(welcomeView)
         NSLayoutConstraint.activate([
@@ -142,15 +174,17 @@ class EditorPaneVC: NSViewController, PaneProtocol {
 
         let label = NSTextField(labelWithString: "schwarzterm")
         label.font = NSFont.systemFont(ofSize: 28, weight: .thin)
-        label.textColor = NSColor(white: 0.35, alpha: 1)
+        label.textColor = t.welcomeTitle.nsColor
         label.translatesAutoresizingMaskIntoConstraints = false
         welcomeView.addSubview(label)
+        welcomeTitleLabel = label
 
         let sub = NSTextField(labelWithString: "open a file to start editing")
         sub.font = NSFont.systemFont(ofSize: 12, weight: .regular)
-        sub.textColor = NSColor(white: 0.28, alpha: 1)
+        sub.textColor = t.welcomeSubtitle.nsColor
         sub.translatesAutoresizingMaskIntoConstraints = false
         welcomeView.addSubview(sub)
+        welcomeSubtitleLabel = sub
 
         NSLayoutConstraint.activate([
             label.centerXAnchor.constraint(equalTo: welcomeView.centerXAnchor),
@@ -189,7 +223,7 @@ class EditorPaneVC: NSViewController, PaneProtocol {
 
         tabs.append(tab)
         welcomeView.isHidden = true
-        tabBar.isHidden = false
+        setTabBarVisible(true)
         switchToTab(tabs.count - 1)
     }
 
@@ -228,11 +262,13 @@ class EditorPaneVC: NSViewController, PaneProtocol {
         }
 
         let cfg  = ConfigManager.shared.config
+        let t    = ThemeManager.shared.current
         let font = NSFont(name: cfg.fontName, size: cfg.fontSize)
             ?? NSFont.monospacedSystemFont(ofSize: cfg.fontSize, weight: .regular)
 
         tv.font               = font
-        tv.textColor          = .labelColor
+        tv.textColor          = t.editorForeground.nsColor
+        tv.backgroundColor    = t.editorBackground.nsColor
         tv.text               = doc.content
         tv.isEditable         = true
         tv.isSelectable       = true
@@ -240,6 +276,7 @@ class EditorPaneVC: NSViewController, PaneProtocol {
         tv.highlightSelectedLine = true
         tv.isHorizontallyResizable = false
         tv.textDelegate       = self
+        sv.backgroundColor    = t.editorBackground.nsColor
 
         return (sv, tv)
     }
@@ -272,7 +309,7 @@ class EditorPaneVC: NSViewController, PaneProtocol {
         nsStorage.beginEditing()
         // Reset all foreground colors to default first
         nsStorage.removeAttribute(.foregroundColor, range: fullRange)
-        nsStorage.addAttribute(.foregroundColor, value: NSColor.labelColor, range: fullRange)
+        nsStorage.addAttribute(.foregroundColor, value: ThemeManager.shared.current.editorForeground.nsColor, range: fullRange)
         // Apply highlight pairs
         for (range, color) in pairs {
             guard range.location != NSNotFound,
@@ -352,7 +389,7 @@ class EditorPaneVC: NSViewController, PaneProtocol {
                 return
             }
             welcomeView.isHidden = false
-            tabBar.isHidden = true
+            setTabBarVisible(false)
         } else {
             switchToTab(max(0, index - 1))
         }
@@ -600,7 +637,7 @@ extension EditorPaneVC: TabTransferProtocol {
 
         if tabs.isEmpty {
             welcomeView.isHidden = false
-            tabBar.isHidden = true
+            setTabBarVisible(false)
         } else {
             switchToTab(max(0, index - 1))
         }
@@ -626,7 +663,7 @@ extension EditorPaneVC: TabTransferProtocol {
 
         tabs.append(newTab)
         welcomeView.isHidden = true
-        tabBar.isHidden = false
+        setTabBarVisible(true)
         switchToTab(tabs.count - 1)
     }
 }

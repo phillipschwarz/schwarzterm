@@ -2,11 +2,11 @@
 import Foundation
 
 struct AppConfig: Codable {
+    var _note: String? = "Save this file and restart schwarzterm to apply changes."
     var fontName: String = "JetBrainsMono-Regular"
     var fontSize: Double = 13.0
     var shell: String = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
-    var terminalBackground: CodableColor = CodableColor(red: 0.1, green: 0.1, blue: 0.1, alpha: 1)
-    var terminalForeground: CodableColor = CodableColor(red: 0.9, green: 0.9, blue: 0.9, alpha: 1)
+    var themeName: String = "Midnight"
 }
 
 struct CodableColor: Codable {

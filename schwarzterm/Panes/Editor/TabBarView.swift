@@ -41,16 +41,19 @@ class TabBarView: NSView {
 
     private func setup() {
         wantsLayer = true
-        layer?.backgroundColor = NSColor(white: 0.11, alpha: 1).cgColor
+        applyTheme()
 
         addButton.image = NSImage(systemSymbolName: "plus", accessibilityDescription: "New Tab")
         addButton.bezelStyle = .inline
         addButton.isBordered = false
-        addButton.contentTintColor = NSColor(white: 0.55, alpha: 1)
         addButton.translatesAutoresizingMaskIntoConstraints = false
         addButton.target = self
         addButton.action = #selector(addButtonClicked)
         addSubview(addButton)
+
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(themeDidChange), name: .themeChanged, object: nil
+        )
 
         clipView.wantsLayer = true
         clipView.layer?.masksToBounds = true
@@ -77,7 +80,32 @@ class TabBarView: NSView {
         delegate?.tabBarDidRequestNewTab(self)
     }
 
+    @objc private func themeDidChange() {
+        applyTheme()
+        tabs.forEach { $0.needsDisplay = true }
+    }
+
+    private func applyTheme() {
+        let t = ThemeManager.shared.current
+        let bg = t.tabBarBackground.nsColor.cgColor
+        if let layer = layer {
+            layer.backgroundColor = bg
+        } else {
+            // Layer not yet created — defer until it exists
+            wantsLayer = true
+            DispatchQueue.main.async { [weak self] in
+                self?.layer?.backgroundColor = bg
+            }
+        }
+        addButton.contentTintColor = t.tabAddButton.nsColor
+    }
+
     override var isFlipped: Bool { true }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil { applyTheme() }
+    }
 
     // MARK: - Public API
 
@@ -286,20 +314,21 @@ private class TabCell: NSView {
     // MARK: - Drawing
 
     override func draw(_ dirtyRect: NSRect) {
+        let t = ThemeManager.shared.current
         let pillRect = bounds
         let pill = NSBezierPath(roundedRect: pillRect, xRadius: Self.cornerRadius, yRadius: Self.cornerRadius)
 
         // --- Pill background ---
         if isSelected {
-            // Frosted glass: semi-transparent light fill
-            NSColor(white: 1.0, alpha: 0.10).setFill()
+            // Frosted glass: semi-transparent fill
+            t.tabSelectedFill.nsColor.withAlphaComponent(0.10).setFill()
             pill.fill()
             // Subtle inner glow border
-            NSColor(white: 1.0, alpha: 0.14).setStroke()
+            t.tabSelectedBorder.nsColor.withAlphaComponent(0.14).setStroke()
             pill.lineWidth = 0.5
             pill.stroke()
         } else if isHovered {
-            NSColor(white: 1.0, alpha: 0.05).setFill()
+            t.tabHoverFill.nsColor.withAlphaComponent(0.05).setFill()
             pill.fill()
         }
         // Unselected + not hovered: fully transparent (no fill)
@@ -315,13 +344,13 @@ private class TabCell: NSView {
 
             // Circle background
             let circlePath = NSBezierPath(ovalIn: closeHitRect)
-            NSColor(white: 1.0, alpha: 0.08).setFill()
+            t.tabCloseFill.nsColor.withAlphaComponent(0.08).setFill()
             circlePath.fill()
 
             // × glyph
             let xAttrs: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(ofSize: 9, weight: .semibold),
-                .foregroundColor: NSColor(white: 0.65, alpha: 1),
+                .foregroundColor: t.tabCloseGlyph.nsColor,
             ]
             let xStr = "×" as NSString
             let xSize = xStr.size(withAttributes: xAttrs)
@@ -340,9 +369,9 @@ private class TabCell: NSView {
         if isModified {
             textColor = .controlAccentColor
         } else if isSelected {
-            textColor = NSColor(white: 0.95, alpha: 1)
+            textColor = t.tabActiveText.nsColor
         } else {
-            textColor = NSColor(white: 0.55, alpha: 1)
+            textColor = t.tabInactiveText.nsColor
         }
 
         let font = NSFont.systemFont(ofSize: 11.5, weight: isSelected ? .medium : .regular)

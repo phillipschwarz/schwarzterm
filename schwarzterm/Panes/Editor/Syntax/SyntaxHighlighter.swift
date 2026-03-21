@@ -23,14 +23,14 @@ func makeSyntaxHighlighter(forExtension ext: String) -> SyntaxHighlighter? {
 // MARK: - Color Palette
 
 enum SyntaxColor {
-    static let keyword    = NSColor(red: 0.56, green: 0.70, blue: 1.00, alpha: 1)
-    static let string     = NSColor(red: 0.80, green: 0.55, blue: 0.40, alpha: 1)
-    static let comment    = NSColor(white: 0.45, alpha: 1)
-    static let number     = NSColor(red: 0.70, green: 0.90, blue: 0.65, alpha: 1)
-    static let typeName   = NSColor(red: 0.85, green: 0.75, blue: 0.45, alpha: 1)
-    static let attribute  = NSColor(red: 0.70, green: 0.85, blue: 0.60, alpha: 1)
-    static let `operator` = NSColor(white: 0.75, alpha: 1)
-    static let punctuation = NSColor(white: 0.60, alpha: 1)
+    static var keyword:     NSColor { ThemeManager.shared.current.syntaxKeyword.nsColor }
+    static var string:      NSColor { ThemeManager.shared.current.syntaxString.nsColor }
+    static var comment:     NSColor { ThemeManager.shared.current.syntaxComment.nsColor }
+    static var number:      NSColor { ThemeManager.shared.current.syntaxNumber.nsColor }
+    static var typeName:    NSColor { ThemeManager.shared.current.syntaxTypeName.nsColor }
+    static var attribute:   NSColor { ThemeManager.shared.current.syntaxAttribute.nsColor }
+    static var `operator`:  NSColor { ThemeManager.shared.current.syntaxOperator.nsColor }
+    static var punctuation: NSColor { ThemeManager.shared.current.syntaxPunctuation.nsColor }
 }
 
 // MARK: - Shared Regex Helper
